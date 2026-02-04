@@ -38,16 +38,22 @@ hdfs dfs -put *.parquet /user/taxi/raw_data/
 ```bash
 cd ~/massive_data_mining
 
+# **QUAN TRỌNG: Kiểm tra Python environment trước**
+bash check_python_env.sh
+
 # Cách 1: Chạy tất cả cùng lúc
 bash run_all.sh
 
-# Cách 2: Chạy từng bước
+# Cách 2: Chạy từng bước với HDFS archive
 cd src
 
 # Bước 1: Build graph
 spark-submit --master spark://master:7077 \
-    --executor-memory 2g \
-    --driver-memory 2g \
+    --executor-memory 500m \
+    --driver-memory 500m \
+    --archives hdfs://master:9000/user/taxi/python_env/mmds-venv.tar.gz#mmds-venv \
+    --conf spark.pyspark.python=./mmds-venv/bin/python3 \
+    --conf spark.pyspark.driver.python=python3 \
     --packages graphframes:graphframes:0.8.3-spark3.5-s_2.12 \
     1_build_graph.py
 

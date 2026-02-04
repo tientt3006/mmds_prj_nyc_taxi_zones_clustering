@@ -9,11 +9,16 @@ Output: Edge list với trọng số (số chuyến taxi giữa các zone)
 """
 
 import sys
-sys.path.append('../config')
+import os
+
+# Thêm parent directory vào Python path để import config
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, count, sum as _sum, avg
-from spark_config import (
+
+# Import từ config directory
+from config.spark_config import (
     create_spark_session, 
     HDFS_RAW_DATA, 
     HDFS_GRAPH_DATA,
@@ -23,7 +28,13 @@ from spark_config import (
     TIP_AMOUNT,
     TRIP_DISTANCE
 )
-from utils import timer, print_section, print_dataframe_stats, save_dataframe_as_csv
+
+# Import từ src directory
+try:
+    from utils import timer, print_section, print_dataframe_stats, save_dataframe_as_csv
+except ImportError:
+    # Nếu import trực tiếp không được, thử import từ src
+    from src.utils import timer, print_section, print_dataframe_stats, save_dataframe_as_csv
 
 
 @timer

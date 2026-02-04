@@ -19,20 +19,20 @@ def create_spark_session(app_name="NYC_Taxi_Graph_Mining"):
     spark = SparkSession.builder \
         .appName(app_name) \
         .master("spark://master:7077") \
-        .config("spark.driver.memory", "2g") \
-        .config("spark.executor.memory", "2g") \
-        .config("spark.executor.cores", "2") \
-        .config("spark.cores.max", "4") \
-        .config("spark.default.parallelism", "8") \
-        .config("spark.sql.shuffle.partitions", "200") \
+        .config("spark.driver.memory", "500m") \
+        .config("spark.executor.memory", "500m") \
+        .config("spark.executor.cores", "1") \
+        .config("spark.cores.max", "2") \
+        .config("spark.default.parallelism", "4") \
+        .config("spark.sql.shuffle.partitions", "50") \
         .config("spark.memory.fraction", "0.8") \
         .config("spark.memory.storageFraction", "0.3") \
         .config("spark.sql.adaptive.enabled", "true") \
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
         .config("spark.kryoserializer.buffer.max", "512m") \
-        .config("spark.driver.maxResultSize", "1g") \
-        .config("spark.rpc.message.maxSize", "256") \
+        .config("spark.driver.maxResultSize", "500m") \
+        .config("spark.rpc.message.maxSize", "128") \
         .config("spark.network.timeout", "600s") \
         .config("spark.executor.heartbeatInterval", "60s") \
         .getOrCreate()
@@ -40,6 +40,29 @@ def create_spark_session(app_name="NYC_Taxi_Graph_Mining"):
     # Set log level
     spark.sparkContext.setLogLevel("WARN")
     
+    return spark
+
+def create_spark_session_full_data(app_name="NYC_Taxi_Full"):
+    """
+    Config cho full data (10GB+) - cần nhiều RAM hơn
+    """
+    
+    spark = SparkSession.builder \
+        .appName(app_name) \
+        .master("spark://master:7077") \
+        .config("spark.driver.memory", "1g") \
+        .config("spark.executor.memory", "1500m") \
+        .config("spark.executor.cores", "2") \
+        .config("spark.cores.max", "4") \
+        .config("spark.default.parallelism", "8") \
+        .config("spark.sql.shuffle.partitions", "200") \
+        .config("spark.memory.fraction", "0.8") \
+        .config("spark.memory.storageFraction", "0.3") \
+        .config("spark.sql.adaptive.enabled", "true") \
+        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
+        .getOrCreate()
+    
+    spark.sparkContext.setLogLevel("WARN")
     return spark
 
 def create_local_spark_session(app_name="NYC_Taxi_Local"):
