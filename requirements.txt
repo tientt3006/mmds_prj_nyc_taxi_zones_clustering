@@ -1,0 +1,27 @@
+# Python dependencies cho NYC Taxi Graph Mining Project
+
+# Core dependencies
+pyspark==3.5.0
+graphframes==0.8.3-spark3.5
+
+# Data processing
+pandas>=1.5.0
+numpy>=1.23.0
+
+# Visualization
+matplotlib>=3.6.0
+seaborn>=0.12.0
+networkx>=3.0
+
+# Utilities
+psutil>=5.9.0  # For memory monitoring
+
+# Optional - Jupyter notebook support
+jupyter>=1.0.0
+notebook>=6.5.0
+ipykernel>=6.20.0
+
+# Development tools (optional)
+pytest>=7.2.0
+black>=23.0.0
+flake8>=6.0.0
