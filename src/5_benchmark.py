@@ -1,263 +1,300 @@
 """
-BƯỚC 5: BENCHMARK - ĐO SCALABILITY
-So sánh performance khi chạy trên 1 node vs 2 nodes
+BƯỚC 5: BENCHMARK VÀ SCALABILITY TESTING
+Đo performance của pipeline và chứng minh tính massive
 
-Đây là phần quan trọng để chứng minh bài toán "MASSIVE"
+Input: Sample data với kích thước khác nhau
+Output: Benchmark metrics (runtime, memory, etc.)
 """
 
 import sys
-sys.path.append('../config')
-
-import time
+import os
 import json
+import time
 from datetime import datetime
+
+# Thêm parent directory vào Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 from pyspark.sql import SparkSession
-from spark_config import HDFS_RAW_DATA, HDFS_GRAPH_DATA
-from utils import timer, print_section, ensure_dir
+from pyspark.sql.functions import col, count, sum as _sum
+
+# Import từ config
+from config.spark_config import (
+    create_spark_session,
+    HDFS_RAW_DATA,
+    HDFS_RESULTS
+)
+
+# Import utils
+try:
+    from utils import timer, print_section
+except ImportError:
+    from src.utils import timer, print_section
 
 
-def benchmark_build_graph(spark, sample_size=None):
+def benchmark_build_graph(spark, sample_fraction, run_name):
     """
-    Benchmark quá trình build graph
+    Benchmark build graph step
     
     Args:
         spark: SparkSession
-        sample_size: Số dòng để sample (None = all data)
+        sample_fraction: Fraction of data to sample (0.01 = 1%)
+        run_name: Name of this benchmark run
         
     Returns:
-        dict với timing results
+        dict with metrics
     """
-    print_section(f"BENCHMARK: BUILD GRAPH")
+    print_section(f"BENCHMARK: BUILD GRAPH - {run_name}")
     
-    if sample_size:
-        print(f"⚠️  Running on SAMPLE: {sample_size:,} rows")
-    else:
-        print(f"🔥 Running on FULL DATA")
-    
-    results = {}
+    start_time = time.time()
     
     # Load data
-    start_time = time.time()
-    df = spark.read.parquet(HDFS_RAW_DATA)
+    print(f"📂 Loading {sample_fraction*100}% of data...")
+    df = spark.read.parquet(HDFS_RAW_DATA).sample(sample_fraction)
     
-    if sample_size:
-        df = df.limit(sample_size)
-    
-    load_time = time.time() - start_time
-    results['load_time'] = load_time
-    results['row_count'] = df.count()
-    
-    print(f"✅ Load time: {load_time:.2f}s")
-    print(f"   Rows: {results['row_count']:,}")
+    # Count raw data
+    raw_count = df.count()
+    print(f"   Raw data: {raw_count:,} rows")
     
     # Clean data
-    start_time = time.time()
-    from pyspark.sql.functions import col
+    print("🧹 Cleaning data...")
+    from config.spark_config import PICKUP_LOCATION, DROPOFF_LOCATION, FARE_AMOUNT
     
-    cleaned = df.filter(
-        (col("PULocationID").isNotNull()) &
-        (col("DOLocationID").isNotNull()) &
-        (col("PULocationID") != col("DOLocationID"))
-    ).cache()
+    cleaned_df = df.filter(
+        (col(PICKUP_LOCATION).isNotNull()) &
+        (col(DROPOFF_LOCATION).isNotNull()) &
+        (col(PICKUP_LOCATION) >= 1) &
+        (col(PICKUP_LOCATION) <= 263) &
+        (col(DROPOFF_LOCATION) >= 1) &
+        (col(DROPOFF_LOCATION) <= 263) &
+        (col(PICKUP_LOCATION) != col(DROPOFF_LOCATION)) &
+        (col(FARE_AMOUNT) >= 0)
+    )
     
-    clean_count = cleaned.count()
-    clean_time = time.time() - start_time
-    
-    results['clean_time'] = clean_time
-    results['clean_row_count'] = clean_count
-    
-    print(f"✅ Clean time: {clean_time:.2f}s")
-    print(f"   Rows after cleaning: {clean_count:,}")
+    cleaned_count = cleaned_df.count()
+    print(f"   Cleaned data: {cleaned_count:,} rows")
     
     # Build edge list
-    start_time = time.time()
-    from pyspark.sql.functions import count as _count
-    
-    edge_list = cleaned.groupBy("PULocationID", "DOLocationID") \
-        .agg(_count("*").alias("trip_count")) \
-        .cache()
+    print("🔨 Building edge list...")
+    edge_list = cleaned_df.groupBy(
+        col(PICKUP_LOCATION).alias("src"),
+        col(DROPOFF_LOCATION).alias("dst")
+    ).agg(
+        count("*").alias("trip_count")
+    )
     
     edge_count = edge_list.count()
-    build_time = time.time() - start_time
-    
-    results['build_time'] = build_time
-    results['edge_count'] = edge_count
-    
-    print(f"✅ Build time: {build_time:.2f}s")
     print(f"   Edges: {edge_count:,}")
     
-    # Total time
-    results['total_time'] = load_time + clean_time + build_time
+    end_time = time.time()
+    elapsed = end_time - start_time
     
-    return results
+    metrics = {
+        "run_name": run_name,
+        "step": "build_graph",
+        "sample_fraction": sample_fraction,
+        "raw_rows": raw_count,
+        "cleaned_rows": cleaned_count,
+        "edges": edge_count,
+        "runtime_seconds": elapsed,
+        "runtime_minutes": elapsed / 60,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    print(f"\n⏱️  Runtime: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
+    
+    return metrics
 
 
-def benchmark_pagerank(spark, iterations=5):
+def benchmark_pagerank(spark, sample_fraction, run_name, iterations=5):
     """
-    Benchmark PageRank
+    Benchmark PageRank step
     
     Args:
         spark: SparkSession
-        iterations: Số iteration
+        sample_fraction: Fraction of data
+        run_name: Name of run
+        iterations: Number of PageRank iterations
         
     Returns:
-        dict với timing results
+        dict with metrics
     """
-    print_section(f"BENCHMARK: PAGERANK ({iterations} iterations)")
+    print_section(f"BENCHMARK: PAGERANK - {run_name}")
     
-    results = {'iterations': iterations}
+    try:
+        from graphframes import GraphFrame
+    except ImportError:
+        print("⚠️  GraphFrames not available, skipping PageRank benchmark")
+        return None
     
-    # Load edge list
     start_time = time.time()
-    edges = spark.read.parquet(f"{HDFS_GRAPH_DATA}edge_list")
     
-    from pyspark.sql.functions import col
+    # Load and build graph (reuse logic)
+    print(f"📂 Preparing graph with {sample_fraction*100}% data...")
+    from config.spark_config import PICKUP_LOCATION, DROPOFF_LOCATION, FARE_AMOUNT
+    
+    df = spark.read.parquet(HDFS_RAW_DATA).sample(sample_fraction)
+    
+    cleaned_df = df.filter(
+        (col(PICKUP_LOCATION).isNotNull()) &
+        (col(DROPOFF_LOCATION).isNotNull()) &
+        (col(PICKUP_LOCATION) >= 1) &
+        (col(PICKUP_LOCATION) <= 263) &
+        (col(DROPOFF_LOCATION) >= 1) &
+        (col(DROPOFF_LOCATION) <= 263) &
+        (col(PICKUP_LOCATION) != col(DROPOFF_LOCATION)) &
+        (col(FARE_AMOUNT) >= 0)
+    )
+    
+    edges = cleaned_df.groupBy(
+        col(PICKUP_LOCATION).alias("src"),
+        col(DROPOFF_LOCATION).alias("dst")
+    ).agg(count("*").alias("weight"))
     
     # Create vertices
     src_v = edges.select(col("src").alias("id")).distinct()
     dst_v = edges.select(col("dst").alias("id")).distinct()
     vertices = src_v.union(dst_v).distinct()
     
-    gf_edges = edges.select("src", "dst", col("trip_count").alias("weight"))
+    num_vertices = vertices.count()
+    num_edges = edges.count()
     
-    from graphframes import GraphFrame
-    graph = GraphFrame(vertices, gf_edges)
+    print(f"   Vertices: {num_vertices:,}, Edges: {num_edges:,}")
     
-    setup_time = time.time() - start_time
-    results['setup_time'] = setup_time
-    
-    print(f"✅ Setup time: {setup_time:.2f}s")
+    # Create GraphFrame
+    graph = GraphFrame(vertices, edges)
     
     # Run PageRank
-    start_time = time.time()
-    pr_result = graph.pageRank(resetProbability=0.15, maxIter=iterations)
-    pr_count = pr_result.vertices.count()
+    print(f"🚀 Running PageRank ({iterations} iterations)...")
+    pr_start = time.time()
     
-    pagerank_time = time.time() - start_time
-    results['pagerank_time'] = pagerank_time
-    results['num_vertices'] = pr_count
+    results = graph.pageRank(resetProbability=0.15, maxIter=iterations)
+    pagerank_df = results.vertices
     
-    print(f"✅ PageRank time: {pagerank_time:.2f}s")
-    print(f"   Vertices: {pr_count}")
+    # Force computation
+    pr_count = pagerank_df.count()
     
-    results['total_time'] = setup_time + pagerank_time
+    pr_end = time.time()
+    pr_elapsed = pr_end - pr_start
     
-    return results
+    end_time = time.time()
+    total_elapsed = end_time - start_time
+    
+    metrics = {
+        "run_name": run_name,
+        "step": "pagerank",
+        "sample_fraction": sample_fraction,
+        "vertices": num_vertices,
+        "edges": num_edges,
+        "iterations": iterations,
+        "pagerank_runtime_seconds": pr_elapsed,
+        "total_runtime_seconds": total_elapsed,
+        "total_runtime_minutes": total_elapsed / 60,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    print(f"\n⏱️  PageRank time: {pr_elapsed:.2f}s")
+    print(f"⏱️  Total time: {total_elapsed:.2f}s ({total_elapsed/60:.2f} min)")
+    
+    return metrics
 
 
-def run_full_benchmark():
+def save_benchmark_results(results, output_dir="../results/benchmarks"):
     """
-    Chạy full benchmark suite
+    Save benchmark results to JSON
+    
+    Args:
+        results: List of metric dicts
+        output_dir: Output directory
     """
+    print_section("SAVE BENCHMARK RESULTS")
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save to JSON
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_file = os.path.join(output_dir, f"benchmark_{timestamp}.json")
+    
+    with open(output_file, 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    print(f"✅ Saved results to: {output_file}")
+    
+    # Print summary
+    print("\n📊 BENCHMARK SUMMARY:")
+    print("-" * 70)
+    for result in results:
+        if result:
+            print(f"\n{result['run_name']} - {result['step']}")
+            if 'runtime_minutes' in result:
+                print(f"  Runtime: {result['runtime_minutes']:.2f} minutes")
+            elif 'total_runtime_minutes' in result:
+                print(f"  Runtime: {result['total_runtime_minutes']:.2f} minutes")
+
+
+def main():
+    """Main execution"""
+    
     print("""
     ╔════════════════════════════════════════════════════════════════╗
     ║                                                                ║
-    ║           NYC TAXI GRAPH MINING - BENCHMARK SUITE             ║
+    ║        NYC TAXI GRAPH MINING - BƯỚC 5: BENCHMARK              ║
     ║                                                                ║
-    ║  Mục đích: Đo performance và chứng minh scalability          ║
+    ║  Mục tiêu: Đo performance và chứng minh scalability          ║
     ║                                                                ║
     ╚════════════════════════════════════════════════════════════════╝
     """)
     
-    # Get cluster info
-    from spark_config import create_spark_session
+    # Create Spark session
     spark = create_spark_session("NYC_Taxi_Benchmark")
     
-    # Collect cluster info
-    cluster_info = {
-        'timestamp': datetime.now().isoformat(),
-        'num_executors': spark.sparkContext.getConf().get('spark.executor.instances', 'N/A'),
-        'executor_memory': spark.sparkContext.getConf().get('spark.executor.memory', 'N/A'),
-        'executor_cores': spark.sparkContext.getConf().get('spark.executor.cores', 'N/A'),
-        'driver_memory': spark.sparkContext.getConf().get('spark.driver.memory', 'N/A'),
-    }
-    
-    print(f"\n📊 CLUSTER CONFIGURATION:")
-    for key, value in cluster_info.items():
-        print(f"   {key}: {value}")
-    
-    all_results = {
-        'cluster_info': cluster_info,
-        'benchmarks': {}
-    }
+    results = []
     
     try:
-        # Benchmark 1: Build graph on sample
+        # Test 1: Small sample (1%)
         print("\n" + "="*70)
-        print("BENCHMARK 1: Build Graph (Sample - 1M rows)")
+        print("TEST 1: 1% DATA SAMPLE")
         print("="*70)
+        metrics_1 = benchmark_build_graph(spark, 0.01, "1% Sample")
+        results.append(metrics_1)
         
-        sample_results = benchmark_build_graph(spark, sample_size=1_000_000)
-        all_results['benchmarks']['build_graph_sample_1M'] = sample_results
-        
-        # Benchmark 2: Build graph on larger sample
+        # Test 2: Medium sample (5%)
         print("\n" + "="*70)
-        print("BENCHMARK 2: Build Graph (Sample - 10M rows)")
+        print("TEST 2: 5% DATA SAMPLE")
         print("="*70)
+        metrics_2 = benchmark_build_graph(spark, 0.05, "5% Sample")
+        results.append(metrics_2)
         
-        large_sample_results = benchmark_build_graph(spark, sample_size=10_000_000)
-        all_results['benchmarks']['build_graph_sample_10M'] = large_sample_results
-        
-        # Benchmark 3: PageRank
+        # Test 3: PageRank on 1% data
         print("\n" + "="*70)
-        print("BENCHMARK 3: PageRank (5 iterations)")
+        print("TEST 3: PAGERANK ON 1% DATA")
         print("="*70)
-        
-        pr_results = benchmark_pagerank(spark, iterations=5)
-        all_results['benchmarks']['pagerank_5iter'] = pr_results
-        
-        # Calculate speedup metrics
-        print("\n" + "="*70)
-        print("📈 SCALABILITY ANALYSIS")
-        print("="*70)
-        
-        sample_1m_time = sample_results['total_time']
-        sample_10m_time = large_sample_results['total_time']
-        
-        # Linear vs actual
-        expected_10m = sample_1m_time * 10
-        speedup = expected_10m / sample_10m_time
-        
-        print(f"\n🔍 Build Graph Scaling:")
-        print(f"   1M rows:  {sample_1m_time:.2f}s")
-        print(f"   10M rows: {sample_10m_time:.2f}s")
-        print(f"   Expected (linear): {expected_10m:.2f}s")
-        print(f"   Speedup: {speedup:.2f}x")
-        
-        if speedup > 1.5:
-            print(f"   ✅ Good parallelization! ({speedup:.2f}x faster than linear)")
-        elif speedup > 1.0:
-            print(f"   ⚠️  Some parallelization benefit ({speedup:.2f}x)")
-        else:
-            print(f"   ❌ No parallelization benefit ({speedup:.2f}x)")
-        
-        all_results['scalability'] = {
-            'scaling_factor': 10,
-            'expected_time': expected_10m,
-            'actual_time': sample_10m_time,
-            'speedup': speedup
-        }
+        metrics_3 = benchmark_pagerank(spark, 0.01, "PageRank 1%", iterations=5)
+        results.append(metrics_3)
         
         # Save results
-        ensure_dir("../results/benchmarks/")
+        save_benchmark_results(results)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"../results/benchmarks/benchmark_{timestamp}.json"
-        
-        with open(filename, 'w') as f:
-            json.dump(all_results, f, indent=2)
-        
-        print(f"\n💾 Benchmark results saved to: {filename}")
+        print("\n" + "="*70)
+        print("🎉 HOÀN THÀNH BƯỚC 5: BENCHMARK")
+        print("="*70)
+        print("\n📌 Kết quả benchmark đã được lưu!")
+        print("📊 Sử dụng kết quả này để:")
+        print("   - Chứng minh tính massive của bài toán")
+        print("   - So sánh performance giữa các cấu hình")
+        print("   - Phân tích scalability")
         
     except Exception as e:
-        print(f"\n❌ BENCHMARK ERROR: {str(e)}")
+        print(f"\n❌ LỖI: {str(e)}")
         import traceback
         traceback.print_exc()
         
     finally:
+        # Stop Spark
         spark.stop()
-        print("\n🛑 Benchmark complete")
+        print("\n🛑 Đã dừng Spark session")
 
 
 if __name__ == "__main__":
-    run_full_benchmark()
+    main()
