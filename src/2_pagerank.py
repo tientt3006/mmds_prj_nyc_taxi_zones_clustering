@@ -1,297 +1,255 @@
 """
-BƯỚC 2: TÍNH PAGERANK CHO TAXI ZONES
-Sử dụng GraphX/GraphFrames với thuật toán iterative PageRank
+BƯỚC 2: TÍNH PAGERANK CHO CÁC TAXI ZONES
+Sử dụng GraphFrames PageRank algorithm
 
-Input: Edge list từ bước 1
+Input: Edge list từ HDFS (output của bước 1)
 Output: PageRank scores cho mỗi zone
-
-Đây là thuật toán ITERATIVE - shuffle dữ liệu lớn qua nhiều vòng lặp
 """
 
 import sys
-sys.path.append('../config')
+import os
+
+# Thêm parent directory vào Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, desc, broadcast
-from graphframes import GraphFrame
-from spark_config import (
+from pyspark.sql.functions import col, desc, count, sum as _sum, avg
+
+# Import từ config
+from config.spark_config import (
     create_spark_session,
     HDFS_GRAPH_DATA,
     HDFS_RESULTS,
-    DAMPING_FACTOR,
     PAGERANK_ITERATIONS,
-    PAGERANK_TOLERANCE
+    DAMPING_FACTOR
 )
-from utils import timer, print_section, print_dataframe_stats
+
+# Import utils
+try:
+    from utils import timer, print_section, print_dataframe_stats
+except ImportError:
+    from src.utils import timer, print_section, print_dataframe_stats
 
 
 @timer
-def load_edge_list(spark, edge_path):
+def load_edge_list(spark):
     """
     Load edge list từ HDFS
     
-    Args:
-        spark: SparkSession
-        edge_path: Path to edge list parquet
-        
     Returns:
-        Edge DataFrame
+        Spark DataFrame với columns: src, dst, trip_count
     """
-    print_section("LOAD EDGE LIST")
+    print_section("LOAD EDGE LIST TỪ HDFS")
     
-    print(f"📂 Đọc edge list từ: {edge_path}")
-    edges_df = spark.read.parquet(edge_path)
+    edge_path = f"{HDFS_GRAPH_DATA}edge_list"
+    print(f"📂 Đọc dữ liệu từ: {edge_path}")
     
-    print_dataframe_stats(edges_df, "Edge List")
-    edges_df.show(5)
-    
-    return edges_df
+    try:
+        edges = spark.read.parquet(edge_path)
+        print("✅ Đã load edge list thành công!")
+        print_dataframe_stats(edges, "Edge List")
+        
+        # Show sample
+        print("\n📄 Sample edges:")
+        edges.show(10)
+        
+        return edges
+        
+    except Exception as e:
+        print(f"❌ Lỗi khi load edge list: {str(e)}")
+        print("\n💡 Gợi ý:")
+        print("   - Đảm bảo đã chạy 1_build_graph.py trước")
+        print(f"   - Kiểm tra path tồn tại: hdfs dfs -ls {edge_path}")
+        raise
 
 
 @timer
-def create_graph(spark, edges_df):
+def create_graphframe(spark, edges):
     """
     Tạo GraphFrame từ edge list
     
     Args:
         spark: SparkSession
-        edges_df: Edge DataFrame
+        edges: Edge DataFrame
         
     Returns:
         GraphFrame object
     """
     print_section("TẠO GRAPHFRAME")
     
-    # Create vertices DataFrame
+    try:
+        from graphframes import GraphFrame
+    except ImportError:
+        print("❌ GraphFrames chưa được cài đặt!")
+        print("💡 Chạy: pip install graphframes")
+        print("   Hoặc dùng --packages trong spark-submit")
+        raise
+    
     print("🔨 Tạo vertices từ edges...")
     
-    # Combine all unique zone IDs
-    src_vertices = edges_df.select(col("src").alias("id")).distinct()
-    dst_vertices = edges_df.select(col("dst").alias("id")).distinct()
+    # Tạo vertices (unique zones)
+    src_vertices = edges.select(col("src").alias("id")).distinct()
+    dst_vertices = edges.select(col("dst").alias("id")).distinct()
     vertices = src_vertices.union(dst_vertices).distinct()
     
     num_vertices = vertices.count()
-    print(f"✅ Số vertices: {num_vertices}")
+    print(f"   - Số vertices (zones): {num_vertices:,}")
     
-    # Prepare edges for GraphFrame (rename columns)
-    print("\n🔨 Chuẩn bị edges cho GraphFrame...")
-    gf_edges = edges_df.select(
+    # Chuẩn bị edges cho GraphFrame
+    gf_edges = edges.select(
         col("src"),
         col("dst"),
         col("trip_count").alias("weight")
     )
     
     num_edges = gf_edges.count()
-    print(f"✅ Số edges: {num_edges}")
+    print(f"   - Số edges: {num_edges:,}")
     
-    # Create GraphFrame
-    print("\n🔨 Tạo GraphFrame object...")
+    # Tạo GraphFrame
+    print("\n🔨 Tạo GraphFrame...")
     graph = GraphFrame(vertices, gf_edges)
     
-    print(f"✅ GraphFrame đã được tạo!")
-    print(f"   - Vertices: {num_vertices}")
-    print(f"   - Edges: {num_edges}")
-    print(f"   - Avg degree: {2 * num_edges / num_vertices:.2f}")
+    print("✅ GraphFrame đã được tạo thành công!")
     
     return graph
 
 
 @timer
-def run_pagerank(graph, iterations=PAGERANK_ITERATIONS, reset_prob=1-DAMPING_FACTOR):
+def run_pagerank(graph, iterations=20, reset_prob=0.15):
     """
     Chạy PageRank algorithm
     
     Args:
         graph: GraphFrame
-        iterations: Số vòng lặp
-        reset_prob: Xác suất reset (1 - damping factor)
+        iterations: Số iterations (mặc định 20)
+        reset_prob: Reset probability (1 - damping factor)
         
     Returns:
         DataFrame với PageRank scores
     """
-    print_section(f"CHẠY PAGERANK ({iterations} ITERATIONS)")
+    print_section("CHẠY PAGERANK ALGORITHM")
     
-    print(f"⚙️  Tham số:")
-    print(f"   - Max iterations: {iterations}")
-    print(f"   - Reset probability: {reset_prob:.3f}")
-    print(f"   - Damping factor: {1-reset_prob:.3f}")
+    print(f"⚙️  Cấu hình:")
+    print(f"   - Số iterations: {iterations}")
+    print(f"   - Damping factor: {1 - reset_prob:.2f}")
+    print(f"   - Reset probability: {reset_prob:.2f}")
     
-    print(f"\n🚀 Bắt đầu PageRank...")
-    print(f"   (Đây là thuật toán iterative, sẽ mất vài phút)")
+    print("\n🚀 Bắt đầu tính PageRank...")
+    print("   (Quá trình này có thể mất 20-60 phút)")
     
-    # Run PageRank
-    results = graph.pageRank(
-        resetProbability=reset_prob,
-        maxIter=iterations
-    )
-    
-    # Extract vertices with PageRank scores
-    pagerank_df = results.vertices.select(
-        col("id").alias("zone_id"),
-        col("pagerank")
-    ).orderBy(desc("pagerank"))
-    
-    print(f"\n✅ PageRank hoàn thành!")
-    
-    # Show statistics
-    print("\n📊 PageRank Statistics:")
-    pagerank_df.describe("pagerank").show()
-    
-    # Show top zones
-    print("\n🏆 TOP 20 ZONES QUAN TRỌNG NHẤT (PageRank):")
-    pagerank_df.show(20, truncate=False)
-    
-    return pagerank_df
+    try:
+        # Chạy PageRank
+        results = graph.pageRank(
+            resetProbability=reset_prob,
+            maxIter=iterations
+        )
+        
+        # Lấy vertices với PageRank scores
+        pagerank_df = results.vertices.select(
+            col("id").alias("zone_id"),
+            col("pagerank")
+        )
+        
+        # Cache kết quả
+        pagerank_df.cache()
+        
+        # Statistics
+        total_zones = pagerank_df.count()
+        total_pr = pagerank_df.agg(_sum("pagerank")).collect()[0][0]
+        avg_pr = total_pr / total_zones if total_zones > 0 else 0
+        
+        print("\n✅ PageRank hoàn thành!")
+        print(f"\n📊 Thống kê:")
+        print(f"   - Tổng số zones: {total_zones:,}")
+        print(f"   - Tổng PageRank: {total_pr:.4f}")
+        print(f"   - Trung bình PageRank: {avg_pr:.6f}")
+        
+        return pagerank_df
+        
+    except Exception as e:
+        print(f"\n❌ Lỗi khi chạy PageRank: {str(e)}")
+        raise
 
 
 @timer
-def analyze_pagerank_distribution(pagerank_df):
+def analyze_pagerank_results(pagerank_df):
     """
-    Phân tích phân phối PageRank
+    Phân tích kết quả PageRank
     
     Args:
         pagerank_df: DataFrame với PageRank scores
     """
-    print_section("PHÂN TÍCH PAGERANK DISTRIBUTION")
+    print_section("PHÂN TÍCH KẾT QUẢ PAGERANK")
     
-    from pyspark.sql.functions import sum as _sum, count, min as _min, max as _max
+    # Sort by PageRank descending
+    ranked = pagerank_df.orderBy(desc("pagerank"))
     
-    # Basic stats
-    stats = pagerank_df.agg(
-        _sum("pagerank").alias("total_pr"),
-        count("zone_id").alias("num_zones"),
-        _min("pagerank").alias("min_pr"),
-        _max("pagerank").alias("max_pr")
-    ).collect()[0]
+    # Top 20 zones
+    print("🏆 TOP 20 ZONES QUAN TRỌNG NHẤT:")
+    print("-" * 50)
+    top20 = ranked.limit(20)
+    top20.show(20, truncate=False)
     
-    print(f"📊 Statistics:")
-    print(f"   - Total PageRank sum: {stats['total_pr']:.4f}")
-    print(f"   - Number of zones: {stats['num_zones']}")
-    print(f"   - Min PageRank: {stats['min_pr']:.6f}")
-    print(f"   - Max PageRank: {stats['max_pr']:.6f}")
-    print(f"   - Ratio (max/min): {stats['max_pr']/stats['min_pr']:.2f}x")
+    # Distribution analysis
+    print("\n📊 Phân phối PageRank:")
+    pagerank_df.describe("pagerank").show()
     
-    # Top zones concentration
-    print("\n🎯 Concentration Analysis:")
+    # Concentration analysis
+    total_pr = pagerank_df.agg(_sum("pagerank")).collect()[0][0]
     
-    total_pr = stats['total_pr']
-    
-    # Top 10
-    top10_pr = pagerank_df.limit(10).agg(_sum("pagerank")).collect()[0][0]
+    top10_pr = ranked.limit(10).agg(_sum("pagerank")).collect()[0][0]
     top10_pct = (top10_pr / total_pr) * 100
-    print(f"   - Top 10 zones: {top10_pct:.2f}% of total PageRank")
     
-    # Top 20
-    top20_pr = pagerank_df.limit(20).agg(_sum("pagerank")).collect()[0][0]
+    top20_pr = ranked.limit(20).agg(_sum("pagerank")).collect()[0][0]
     top20_pct = (top20_pr / total_pr) * 100
-    print(f"   - Top 20 zones: {top20_pct:.2f}% of total PageRank")
     
-    # Top 50
-    top50_pr = pagerank_df.limit(50).agg(_sum("pagerank")).collect()[0][0]
+    top50_pr = ranked.limit(50).agg(_sum("pagerank")).collect()[0][0]
     top50_pct = (top50_pr / total_pr) * 100
-    print(f"   - Top 50 zones: {top50_pct:.2f}% of total PageRank")
+    
+    print(f"\n📈 Phân tích concentration:")
+    print(f"   - Top 10 zones: {top10_pct:.2f}% total PageRank")
+    print(f"   - Top 20 zones: {top20_pct:.2f}% total PageRank")
+    print(f"   - Top 50 zones: {top50_pct:.2f}% total PageRank")
+    
+    # Power-law check
+    if top10_pct > 40:
+        print("\n💡 Phân phối PageRank có đặc điểm POWER-LAW")
+        print("   → Một số zones rất quan trọng, phần lớn zones ít quan trọng hơn")
 
 
 @timer
 def save_pagerank_results(pagerank_df, output_path):
     """
-    Lưu kết quả PageRank
+    Lưu kết quả PageRank vào HDFS
     
     Args:
         pagerank_df: DataFrame với PageRank scores
-        output_path: Output path
+        output_path: HDFS output path
     """
     print_section("LƯU KẾT QUẢ PAGERANK")
     
-    # Save as Parquet
-    parquet_path = f"{output_path}/pagerank_scores"
-    print(f"💾 Lưu Parquet: {parquet_path}")
+    print(f"💾 Lưu Parquet vào: {output_path}")
     
+    # Save as Parquet
     pagerank_df.write \
         .mode("overwrite") \
-        .parquet(parquet_path)
+        .parquet(output_path)
     
-    print(f"✅ Đã lưu Parquet!")
+    print("✅ Đã lưu Parquet format")
     
-    # Save top 100 as CSV
-    csv_path = f"{output_path}/pagerank_top100"
-    print(f"\n💾 Lưu top 100 zones (CSV): {csv_path}")
+    # Also save CSV of top 100
+    csv_path = output_path.replace("/results/", "/results_csv/")
+    print(f"\n💾 Lưu CSV top 100 vào: {csv_path}")
     
-    pagerank_df.limit(100).coalesce(1).write \
+    pagerank_df.orderBy(desc("pagerank")) \
+        .limit(100) \
+        .coalesce(1) \
+        .write \
         .mode("overwrite") \
         .option("header", "true") \
         .csv(csv_path)
     
-    print(f"✅ Đã lưu CSV!")
-
-
-@timer
-def compare_with_simple_metrics(spark, edge_list_path, pagerank_df):
-    """
-    So sánh PageRank với các metrics đơn giản
-    
-    Args:
-        spark: SparkSession
-        edge_list_path: Path to edge list
-        pagerank_df: PageRank results
-    """
-    print_section("SO SÁNH PAGERANK VS SIMPLE METRICS")
-    
-    # Load edge list
-    edges = spark.read.parquet(edge_list_path)
-    
-    # Calculate total trips per zone (as destination)
-    print("🔍 Tính tổng trips đến mỗi zone...")
-    total_trips_in = edges.groupBy("dst") \
-        .agg({"trip_count": "sum"}) \
-        .select(
-            col("dst").alias("zone_id"),
-            col("sum(trip_count)").alias("total_trips_in")
-        )
-    
-    # Join with PageRank
-    comparison = pagerank_df.join(
-        total_trips_in,
-        on="zone_id",
-        how="left"
-    ).fillna(0)
-    
-    # Add rank columns
-    from pyspark.sql.window import Window
-    from pyspark.sql.functions import row_number
-    
-    window_pr = Window.orderBy(desc("pagerank"))
-    window_trips = Window.orderBy(desc("total_trips_in"))
-    
-    comparison = comparison.withColumn("pr_rank", row_number().over(window_pr)) \
-                           .withColumn("trips_rank", row_number().over(window_trips))
-    
-    # Show comparison
-    print("\n📊 Top 20 zones - PageRank vs Total Trips:")
-    comparison.select(
-        "zone_id",
-        "pr_rank",
-        "pagerank",
-        "trips_rank",
-        "total_trips_in"
-    ).orderBy("pr_rank").show(20, truncate=False)
-    
-    # Calculate correlation
-    print("\n🔗 Correlation analysis:")
-    from pyspark.sql.functions import corr
-    
-    correlation = comparison.agg(
-        corr("pagerank", "total_trips_in").alias("correlation")
-    ).collect()[0]["correlation"]
-    
-    print(f"   - Pearson correlation (PageRank vs Total Trips): {correlation:.4f}")
-    
-    if correlation > 0.8:
-        print("   ✅ Correlation cao - PageRank tương đồng với traffic volume")
-    elif correlation > 0.5:
-        print("   ⚠️  Correlation trung bình - PageRank có khác biệt với traffic volume")
-    else:
-        print("   ⚠️  Correlation thấp - PageRank khác biệt đáng kể với traffic volume")
+    print("✅ Đã lưu CSV format")
 
 
 def main():
@@ -300,10 +258,10 @@ def main():
     print("""
     ╔════════════════════════════════════════════════════════════════╗
     ║                                                                ║
-    ║         NYC TAXI GRAPH MINING - BƯỚC 2: PAGERANK              ║
+    ║        NYC TAXI GRAPH MINING - BƯỚC 2: PAGERANK               ║
     ║                                                                ║
-    ║  Mục tiêu: Tính importance của mỗi zone bằng PageRank        ║
-    ║  Phương pháp: Iterative GraphX algorithm                      ║
+    ║  Mục tiêu: Tính PageRank cho các taxi zones                  ║
+    ║  Thuật toán: GraphFrames PageRank (iterative)                ║
     ║                                                                ║
     ╚════════════════════════════════════════════════════════════════╝
     """)
@@ -313,28 +271,29 @@ def main():
     
     try:
         # Step 1: Load edge list
-        edge_path = f"{HDFS_GRAPH_DATA}edge_list"
-        edges_df = load_edge_list(spark, edge_path)
+        edges = load_edge_list(spark)
         
-        # Step 2: Create graph
-        graph = create_graph(spark, edges_df)
+        # Step 2: Create GraphFrame
+        graph = create_graphframe(spark, edges)
         
         # Step 3: Run PageRank
-        pagerank_df = run_pagerank(graph)
+        pagerank_df = run_pagerank(
+            graph, 
+            iterations=PAGERANK_ITERATIONS,
+            reset_prob=1 - DAMPING_FACTOR
+        )
         
         # Step 4: Analyze results
-        analyze_pagerank_distribution(pagerank_df)
+        analyze_pagerank_results(pagerank_df)
         
-        # Step 5: Compare with simple metrics
-        compare_with_simple_metrics(spark, edge_path, pagerank_df)
-        
-        # Step 6: Save results
-        save_pagerank_results(pagerank_df, HDFS_RESULTS)
+        # Step 5: Save results
+        output_path = f"{HDFS_RESULTS}pagerank_scores"
+        save_pagerank_results(pagerank_df, output_path)
         
         print("\n" + "="*70)
         print("🎉 HOÀN THÀNH BƯỚC 2: PAGERANK")
         print("="*70)
-        print(f"\n📂 Kết quả đã được lưu tại: {HDFS_RESULTS}")
+        print(f"\n📂 Kết quả đã được lưu tại: {output_path}")
         print("\n📌 Next steps:")
         print("   1. Chạy 3_clustering.py để phát hiện communities")
         print("   2. Chạy 4_visualization.py để visualize kết quả")
