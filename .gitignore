@@ -1,3 +1,4 @@
-yellow_tripdata_2025-06.parquet
-yellow_tripdata_2025-01.parquet
+*.parquet
+*.csv
 taxi+_zone_lookup.csv
+\yellow_tripdata
