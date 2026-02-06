@@ -1,0 +1,156 @@
+version: '3.8'
+
+services:
+  # ==================== MASTER NODE ====================
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taxi-mining-master
+    hostname: master
+    networks:
+      - hadoop-network
+    ports:
+      # HDFS NameNode
+      - "9870:9870"    # NameNode Web UI
+      - "9000:9000"    # HDFS port
+      # YARN ResourceManager
+      - "8088:8088"    # ResourceManager Web UI
+      - "8030:8030"    # ResourceManager scheduler
+      - "8031:8031"    # ResourceManager tracker
+      - "8032:8032"    # ResourceManager admin
+      # Spark Master
+      - "8080:8080"    # Spark Master Web UI
+      - "7077:7077"    # Spark Master port
+      # Spark History Server
+      - "18080:18080"  # Spark History UI
+      # Jupyter
+      - "8888:8888"    # Jupyter Notebook
+      # Spark Application UI
+      - "4040:4040"    # Spark Driver UI
+    environment:
+      - HADOOP_ROLE=master
+      - SPARK_ROLE=master
+    volumes:
+      # Hadoop configuration
+      - ./config/hadoop:/opt/hadoop/etc/hadoop
+      # Spark configuration
+      - ./config/spark:/opt/spark/conf
+      # Persistent HDFS data
+      - hadoop-namenode:/hadoop_data/namenode
+      - hadoop-datanode-master:/hadoop_data/datanode
+      # Workspace (code, notebooks, results)
+      - ../src:/workspace/src
+      - ../notebooks:/workspace/notebooks
+      - ../results:/workspace/results
+      - ../data:/workspace/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    command: >
+      bash -c "
+        service ssh start &&
+        hdfs namenode -format -force -nonInteractive || true &&
+        start-dfs.sh &&
+        start-yarn.sh &&
+        start-master.sh &&
+        start-history-server.sh &&
+        tail -f /dev/null
+      "
+
+  # ==================== WORKER NODE 1 ====================
+  worker1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taxi-mining-worker1
+    hostname: worker1
+    networks:
+      - hadoop-network
+    depends_on:
+      - master
+    environment:
+      - HADOOP_ROLE=worker
+      - SPARK_ROLE=worker
+      - SPARK_MASTER_URL=spark://master:7077
+    volumes:
+      # Hadoop configuration (shared từ master)
+      - ./config/hadoop:/opt/hadoop/etc/hadoop
+      # Spark configuration (shared từ master)
+      - ./config/spark:/opt/spark/conf
+      # Persistent HDFS data
+      - hadoop-datanode-worker1:/hadoop_data/datanode
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    command: >
+      bash -c "
+        service ssh start &&
+        sleep 30 &&
+        start-worker.sh spark://master:7077 &&
+        tail -f /dev/null
+      "
+
+  # ==================== WORKER NODE 2 (Optional) ====================
+  worker2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taxi-mining-worker2
+    hostname: worker2
+    networks:
+      - hadoop-network
+    depends_on:
+      - master
+    environment:
+      - HADOOP_ROLE=worker
+      - SPARK_ROLE=worker
+      - SPARK_MASTER_URL=spark://master:7077
+    volumes:
+      - ./config/hadoop:/opt/hadoop/etc/hadoop
+      - ./config/spark:/opt/spark/conf
+      - hadoop-datanode-worker2:/hadoop_data/datanode
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    command: >
+      bash -c "
+        service ssh start &&
+        sleep 30 &&
+        start-worker.sh spark://master:7077 &&
+        tail -f /dev/null
+      "
+    profiles:
+      - full-cluster  # Chỉ khởi động khi chạy: docker-compose --profile full-cluster up
+
+networks:
+  hadoop-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+volumes:
+  hadoop-namenode:
+    driver: local
+  hadoop-datanode-master:
+    driver: local
+  hadoop-datanode-worker1:
+    driver: local
+  hadoop-datanode-worker2:
+    driver: local
