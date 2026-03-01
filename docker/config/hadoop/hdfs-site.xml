@@ -3,19 +3,19 @@
 <configuration>
     <property>
         <name>dfs.replication</name>
-        <value>2</value>
+        <value>1</value>
         <description>Default block replication</description>
     </property>
     
     <property>
         <name>dfs.namenode.name.dir</name>
-        <value>file:///hadoop_data/namenode</value>
+        <value>/hadoop_data/namenode</value>
         <description>NameNode storage directory</description>
     </property>
     
     <property>
         <name>dfs.datanode.data.dir</name>
-        <value>file:///hadoop_data/datanode</value>
+        <value>/hadoop_data/datanode</value>
         <description>DataNode storage directory</description>
     </property>
     
@@ -35,5 +35,21 @@
         <name>dfs.datanode.handler.count</name>
         <value>10</value>
         <description>DataNode RPC threads</description>
+    </property>
+    
+    <property>
+        <name>dfs.namenode.http-address</name>
+        <value>master:9870</value>
+        <description>HTTP address of the NameNode</description>
+    </property>
+    
+    <property>
+        <name>dfs.namenode.secondary.http-address</name>
+        <value>master:9868</value>
+        <description>HTTP address of the Secondary NameNode</description>
+    </property>
+    <property>
+        <name>dfs.datanode.hostname</name>
+        <value></value>
     </property>
 </configuration>

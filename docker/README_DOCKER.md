@@ -2,7 +2,6 @@
 
 ## MỤC LỤC
 1. [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
-2. [Cài đặt Docker](#cài-đặt-docker)
 3. [Build và khởi động cluster](#build-và-khởi-động-cluster)
 4. [Kiểm tra hệ thống](#kiểm-tra-hệ-thống)
 5. [Upload dữ liệu](#upload-dữ-liệu)
@@ -11,88 +10,12 @@
 
 ---
 
-## YÊU CẦU HỆ THỐNG
-
-### Hardware tối thiểu
-- **RAM:** 8GB (khuyến nghị 16GB)
-- **CPU:** 4 cores
-- **Disk:** 50GB trống
-- **OS:** Windows 10/11, macOS, hoặc Linux
-
-### Software cần cài đặt
-- **Docker Desktop** (Windows/Mac) hoặc **Docker Engine** (Linux)
-- **Docker Compose** (thường đi kèm Docker Desktop)
-
----
-
-## CÀI ĐẶT DOCKER
-
-### Windows 10/11
-
-```powershell
-# 1. Download Docker Desktop
-# Truy cập: https://www.docker.com/products/docker-desktop/
-
-# 2. Cài đặt và khởi động Docker Desktop
-
-# 3. Kiểm tra cài đặt
-docker --version
-docker-compose --version
-
-# 4. Cấu hình tài nguyên
-# Docker Desktop > Settings > Resources
-# - CPUs: 4
-# - Memory: 8GB (hoặc 12GB nếu có)
-# - Swap: 2GB
-# - Disk size: 50GB
-```
-
-### macOS
-
-```bash
-# Download Docker Desktop for Mac
-# https://www.docker.com/products/docker-desktop/
-
-# Sau khi cài, kiểm tra
-docker --version
-docker-compose --version
-```
-
-### Linux (Ubuntu/Debian)
-
-```bash
-# Cài Docker Engine
-sudo apt update
-sudo apt install -y apt-transport-https ca-certificates curl software-properties-common
-
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io
-
-# Cài Docker Compose
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-
-# Thêm user vào group docker
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Kiểm tra
-docker --version
-docker-compose --version
-```
-
----
-
 ## BUILD VÀ KHỞI ĐỘNG CLUSTER
 
 ### 1. Clone project
 
 ```bash
-cd d:\neit_ng\prjs_i\py_cmm_4thy2nds\massive_data_minning
+cd <your prj folder>
 ```
 
 ### 2. Build Docker images
@@ -100,7 +23,7 @@ cd d:\neit_ng\prjs_i\py_cmm_4thy2nds\massive_data_minning
 ```bash
 cd docker
 
-# Build images (lần đầu tiên sẽ mất 5-10 phút)
+# Build images
 docker-compose build
 
 # Xem images đã build
@@ -131,6 +54,13 @@ docker-compose ps
 # NAME                  STATUS         PORTS
 # taxi-mining-master    Up 2 minutes   0.0.0.0:8088->8088/tcp, ...
 # taxi-mining-worker1   Up 2 minutes   
+# taxi-mining-worker2   Up 2 minutes   
+
+# nếu cần rebuilt
+docker-compose down -v
+# Xóa images cũ
+docker rmi docker-master docker-worker1 taxi-mining-master taxi-mining-worker 2>nul
+
 ```
 
 ---
@@ -197,7 +127,7 @@ exit
 
 ```bash
 # Trên máy host (Windows/Mac/Linux)
-cd d:\neit_ng\prjs_i\py_cmm_4thy2nds\massive_data_minning
+cd <your prj folder>
 
 # Tạo thư mục data
 mkdir -p data/raw
@@ -364,11 +294,13 @@ docker-compose logs --tail=100 master
 ### Scale workers
 
 ```bash
-# Thêm workers (tối đa 3 như cấu hình)
+# Cluster hiện có 2 workers (worker1, worker2)
+# Để thêm worker động dùng scale (nếu dùng service tên 'worker'):
 docker-compose up -d --scale worker=3
 
-# Giảm xuống 1 worker
-docker-compose up -d --scale worker=1
+# Để restart worker cụ thể
+docker-compose restart worker1
+docker-compose restart worker2
 ```
 
 ### Vào container để debug
@@ -379,6 +311,9 @@ docker exec -it taxi-mining-master bash
 
 # Vào worker1
 docker exec -it taxi-mining-worker1 bash
+
+# Vào worker2
+docker exec -it taxi-mining-worker2 bash
 
 # Chạy lệnh trực tiếp không vào shell
 docker exec taxi-mining-master hdfs dfs -ls /
@@ -410,6 +345,7 @@ docker exec -it taxi-mining-master bash
 # Kiểm tra HDFS processes
 jps
 # Nên thấy: NameNode, DataNode, SecondaryNameNode
+# Trên mỗi worker: DataNode
 
 # Format lại NameNode (CHỈ khi cần thiết - MẤT DỮ LIỆU)
 hdfs namenode -format -force

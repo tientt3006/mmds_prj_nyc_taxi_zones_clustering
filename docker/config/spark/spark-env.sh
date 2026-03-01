@@ -4,6 +4,7 @@
 export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
 
 # Hadoop Configuration
+export HADOOP_HOME=/opt/hadoop
 export HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
 
 # Spark Master Configuration
@@ -25,4 +26,4 @@ export PYSPARK_PYTHON=python3
 export PYSPARK_DRIVER_PYTHON=python3
 
 # History Server
-export SPARK_HISTORY_OPTS="-Dspark.history.fs.logDirectory=hdfs://master:9000/spark-logs"
+export SPARK_HISTORY_OPTS="-Dspark.history.fs.logDirectory=hdfs://master:9000/tmp/spark-events"

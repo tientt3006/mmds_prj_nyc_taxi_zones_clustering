@@ -14,21 +14,39 @@
     </property>
     
     <property>
+        <name>yarn.nodemanager.aux-services.mapreduce.shuffle.class</name>
+        <value>org.apache.hadoop.mapred.ShuffleHandler</value>
+        <description>Shuffle handler class</description>
+    </property>
+    
+    <property>
+        <name>yarn.resourcemanager.address</name>
+        <value>master:8032</value>
+        <description>ResourceManager address</description>
+    </property>
+    
+    <property>
+        <name>yarn.resourcemanager.webapp.address</name>
+        <value>master:8088</value>
+        <description>ResourceManager webapp address</description>
+    </property>
+    
+    <property>
         <name>yarn.nodemanager.resource.memory-mb</name>
         <value>2048</value>
         <description>Physical memory for NodeManager</description>
     </property>
     
     <property>
-        <name>yarn.scheduler.maximum-allocation-mb</name>
-        <value>2048</value>
-        <description>Max memory per container</description>
-    </property>
-    
-    <property>
         <name>yarn.nodemanager.resource.cpu-vcores</name>
         <value>2</value>
         <description>CPU cores for NodeManager</description>
+    </property>
+    
+    <property>
+        <name>yarn.scheduler.maximum-allocation-mb</name>
+        <value>2048</value>
+        <description>Max memory per container</description>
     </property>
     
     <property>

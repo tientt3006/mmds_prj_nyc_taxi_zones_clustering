@@ -12,10 +12,4 @@
         <value>/hadoop_tmp</value>
         <description>Temporary directory for Hadoop</description>
     </property>
-    
-    <property>
-        <name>io.file.buffer.size</name>
-        <value>131072</value>
-        <description>Buffer size for read/write operations</description>
-    </property>
 </configuration>
